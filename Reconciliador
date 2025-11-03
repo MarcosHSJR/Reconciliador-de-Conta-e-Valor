@@ -1,0 +1,1180 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import os
+import re
+from pathlib import Path
+import threading
+from datetime import datetime
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
+
+try:
+    from openpyxl import load_workbook
+except ImportError:
+    load_workbook = None
+
+
+class PTPWizard:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("PTP Wizard")
+        try:
+            self.root.state('zoomed')
+        except tk.TclError:
+            self.root.attributes('-zoomed', True)
+        
+        self.bg_color = "#1e1e1e"
+        self.fg_color = "#ffffff"
+        self.button_bg = "#2d2d30"
+        self.button_active = "#3e3e42"
+        self.entry_bg = "#252526"
+        self.log_bg = "#1e1e1e"
+        self.success_color = "#4ec9b0"
+        self.error_color = "#f48771"
+        self.warning_color = "#dcdcaa"
+        
+        self.root.configure(bg=self.bg_color)
+        
+        self.extract_files = []
+        self.voucher_files = []
+        self.excel_file = None
+        self.comparison_results = []
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        title_frame = tk.Frame(self.root, bg=self.bg_color)
+        title_frame.pack(pady=20, padx=20, fill='x')
+        
+        title_label = tk.Label(
+            title_frame,  
+            text="🧙 PTP Wizard",  
+            font=("Arial", 24, "bold"),
+            bg=self.bg_color,  
+            fg=self.success_color
+        )
+        title_label.pack()
+        
+        subtitle_label = tk.Label(
+            title_frame,
+            text="Processamento de Extratos e Pagamentos",
+            font=("Arial", 10),
+            bg=self.bg_color,
+            fg=self.fg_color
+        )
+        subtitle_label.pack()
+        
+        files_frame = tk.LabelFrame(
+            self.root,
+            text="Arquivos",
+            font=("Arial", 10, "bold"),
+            bg=self.bg_color,
+            fg=self.fg_color,
+            padx=10,
+            pady=10
+        )
+        files_frame.pack(pady=10, padx=20, fill='x')
+        
+        extract_button = tk.Button(
+            files_frame,
+            text="📄 Selecionar Extratos Bancários (PDFs)",
+            command=self.select_extracts,
+            bg=self.button_bg,
+            fg=self.fg_color,
+            activebackground=self.button_active,
+            activeforeground=self.fg_color,
+            font=("Arial", 10),
+            relief='flat',
+            padx=20,
+            pady=10,
+            cursor="hand2"
+        )
+        extract_button.pack(pady=5, fill='x')
+        
+        self.extract_label = tk.Label(
+            files_frame,
+            text="Nenhum arquivo selecionado",
+            bg=self.bg_color,
+            fg=self.warning_color,
+            font=("Arial", 9)
+        )
+        self.extract_label.pack(pady=2)
+        
+        voucher_button = tk.Button(
+            files_frame,
+            text="📋 Selecionar Comprovantes (PDFs)",
+            command=self.select_vouchers,
+            bg=self.button_bg,
+            fg=self.fg_color,
+            activebackground=self.button_active,
+            activeforeground=self.fg_color,
+            font=("Arial", 10),
+            relief='flat',
+            padx=20,
+            pady=10,
+            cursor="hand2"
+        )
+        voucher_button.pack(pady=5, fill='x')
+        
+        self.voucher_label = tk.Label(
+            files_frame,
+            text="Nenhum arquivo selecionado",
+            bg=self.bg_color,
+            fg=self.warning_color,
+            font=("Arial", 9)
+        )
+        self.voucher_label.pack(pady=2)
+        
+        excel_button = tk.Button(
+            files_frame,
+            text="📊 Selecionar Arquivo Excel",
+            command=self.select_excel,
+            bg=self.button_bg,
+            fg=self.fg_color,
+            activebackground=self.button_active,
+            activeforeground=self.fg_color,
+            font=("Arial", 10),
+            relief='flat',
+            padx=20,
+            pady=10,
+            cursor="hand2"
+        )
+        excel_button.pack(pady=5, fill='x')
+        
+        self.excel_label = tk.Label(
+            files_frame,
+            text="Nenhum arquivo selecionado",
+            bg=self.bg_color,
+            fg=self.warning_color,
+            font=("Arial", 9)
+        )
+        self.excel_label.pack(pady=2)
+        
+        actions_frame = tk.LabelFrame(
+            self.root,
+            text="Ações",
+            font=("Arial", 10, "bold"),
+            bg=self.bg_color,
+            fg=self.fg_color,
+            padx=10,
+            pady=10
+        )
+        actions_frame.pack(pady=10, padx=20, fill='x')
+        
+        compare_button = tk.Button(
+            actions_frame,
+            text="🔍 Comparar Contas e Valores",
+            command=self.compare_extracts,
+            bg="#0e639c",
+            fg=self.fg_color,
+            activebackground="#1177bb",
+            activeforeground=self.fg_color,
+            font=("Arial", 11, "bold"),
+            relief='flat',
+            padx=20,
+            pady=12,
+            cursor="hand2"
+        )
+        compare_button.pack(pady=5, fill='x')
+        
+        update_button = tk.Button(
+            actions_frame,
+            text="📝 Atualizar Excel (PaymentRequests)",
+            command=self.update_excel,
+            bg="#0e639c",
+            fg=self.fg_color,
+            activebackground="#1177bb",
+            activeforeground=self.fg_color,
+            font=("Arial", 11, "bold"),
+            relief='flat',
+            padx=20,
+            pady=12,
+            cursor="hand2"
+        )
+        update_button.pack(pady=5, fill='x')
+        
+        export_button = tk.Button(
+            actions_frame,
+            text="📤 Exportar Relatório (Excel)",
+            command=self.export_report,
+            bg="#107c10",
+            fg=self.fg_color,
+            activebackground="#0e6b0e",
+            activeforeground=self.fg_color,
+            font=("Arial", 11, "bold"),
+            relief='flat',
+            padx=20,
+            pady=12,
+            cursor="hand2"
+        )
+        export_button.pack(pady=5, fill='x')
+        
+        progress_frame = tk.Frame(self.root, bg=self.bg_color)
+        progress_frame.pack(pady=10, padx=20, fill='x')
+        
+        self.progress = ttk.Progressbar(
+            progress_frame,
+            mode='indeterminate',
+            length=300
+        )
+        self.progress.pack(fill='x')
+        
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure(
+            "TProgressbar",
+            troughcolor=self.entry_bg,
+            background=self.success_color,
+            bordercolor=self.bg_color,
+            lightcolor=self.success_color,
+            darkcolor=self.success_color
+        )
+
+        main_pane = tk.PanedWindow(
+            self.root, 
+            orient=tk.VERTICAL, 
+            bg=self.bg_color, 
+            sashwidth=8,
+            sashrelief=tk.FLAT
+        )
+        main_pane.pack(pady=10, padx=20, fill='both', expand=True)
+
+        log_frame = tk.LabelFrame(
+            main_pane,
+            text="Log de Resultados",
+            font=("Arial", 10, "bold"),
+            bg=self.bg_color,
+            fg=self.fg_color,
+            padx=10,
+            pady=10
+        )
+        log_frame.pack(fill='both', expand=True)
+        main_pane.add(log_frame, height=250)
+        
+        log_scrollbar = tk.Scrollbar(log_frame, bg=self.button_bg)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.log_text = tk.Text(
+            log_frame,
+            bg=self.log_bg,
+            fg=self.fg_color,
+            font=("Consolas", 9),
+            wrap=tk.WORD,
+            yscrollcommand=log_scrollbar.set,
+            insertbackground=self.fg_color
+        )
+        self.log_text.pack(fill='both', expand=True)
+        log_scrollbar.config(command=self.log_text.yview)
+        
+        self.log_text.tag_config("success", foreground=self.success_color)
+        self.log_text.tag_config("error", foreground=self.error_color)
+        self.log_text.tag_config("warning", foreground=self.warning_color)
+        self.log_text.tag_config("info", foreground="#569cd6")
+        self.log_text.tag_config("debug", foreground="#808080")
+        
+        results_frame = tk.LabelFrame(
+            main_pane,
+            text="Resultados da Reconciliação (em tela)",
+            font=("Arial", 10, "bold"),
+            bg=self.bg_color,
+            fg=self.fg_color,
+            padx=10,
+            pady=10
+        )
+        results_frame.pack(fill='both', expand=True)
+        main_pane.add(results_frame)
+
+        style.configure(
+            "Treeview",
+            background=self.entry_bg,
+            foreground=self.fg_color,
+            fieldbackground=self.entry_bg,
+            rowheight=25,
+            font=("Arial", 9)
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=self.button_bg,
+            foreground=self.success_color,
+            font=("Arial", 10, "bold"),
+            relief='flat'
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[('active', self.button_active)]
+        )
+
+        tree_scroll_y = tk.Scrollbar(results_frame, orient=tk.VERTICAL, bg=self.button_bg)
+        tree_scroll_x = tk.Scrollbar(results_frame, orient=tk.HORIZONTAL, bg=self.button_bg)
+        tree_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        tree_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.results_tree = ttk.Treeview(
+            results_frame,
+            columns=('ext_conta', 'ext_valor', 'comp_conta', 'comp_valor', 'sap', 'status', 'obs'),
+            show='headings',
+            yscrollcommand=tree_scroll_y.set,
+            xscrollcommand=tree_scroll_x.set
+        )
+        self.results_tree.pack(fill='both', expand=True)
+        
+        tree_scroll_y.config(command=self.results_tree.yview)
+        tree_scroll_x.config(command=self.results_tree.xview)
+
+        self.results_tree.heading('ext_conta', text='Conta (Extrato)')
+        self.results_tree.column('ext_conta', width=120, anchor=tk.W)
+        self.results_tree.heading('ext_valor', text='Valor (Extrato)')
+        self.results_tree.column('ext_valor', width=120, anchor=tk.E)
+        self.results_tree.heading('comp_conta', text='Conta (Comprov.)')
+        self.results_tree.column('comp_conta', width=120, anchor=tk.W)
+        self.results_tree.heading('comp_valor', text='Valor (Comprov.)')
+        self.results_tree.column('comp_valor', width=120, anchor=tk.E)
+        self.results_tree.heading('sap', text='SAP')
+        self.results_tree.column('sap', width=100, anchor=tk.W)
+        self.results_tree.heading('status', text='Status')
+        self.results_tree.column('status', width=150, anchor=tk.CENTER)
+        self.results_tree.heading('obs', text='Observação')
+        self.results_tree.column('obs', width=300, anchor=tk.W)
+
+        self.results_tree.tag_configure('ok', background=self.entry_bg, foreground=self.success_color)
+        self.results_tree.tag_configure('nok', background=self.entry_bg, foreground=self.error_color)
+        self.results_tree.tag_configure('warning', background=self.entry_bg, foreground=self.warning_color)
+        
+        self.log_message("✨ PTP Wizard iniciado. Selecione os arquivos para começar.", "info")
+        
+    def log_message(self, message, tag="info"):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        full_message = f"[{timestamp}] {message}\n"
+        self.log_text.insert(tk.END, full_message, tag)
+        self.log_text.see(tk.END)
+        self.root.update_idletasks()
+        
+    def select_extracts(self):
+        files = filedialog.askopenfilenames(
+            title="Selecione os Extratos Bancários (PDFs)",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
+        )
+        
+        if files:
+            self.extract_files = list(files)
+            count = len(self.extract_files)
+            self.extract_label.config(
+                text=f"{count} extrato(s) selecionado(s)",
+                fg=self.success_color
+            )
+            self.log_message(f"✓ {count} Extrato(s) Bancário(s) selecionado(s)", "success")
+            for pdf in self.extract_files:
+                self.log_message(f"  - {os.path.basename(pdf)}", "info")
+    
+    def select_vouchers(self):
+        files = filedialog.askopenfilenames(
+            title="Selecione os Comprovantes (PDFs)",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")]
+        )
+        
+        if files:
+            self.voucher_files = list(files)
+            count = len(self.voucher_files)
+            self.voucher_label.config(
+                text=f"{count} comprovante(s) selecionado(s)",
+                fg=self.success_color
+            )
+            self.log_message(f"✓ {count} Comprovante(s) selecionado(s)", "success")
+            for pdf in self.voucher_files:
+                self.log_message(f"  - {os.path.basename(pdf)}", "info")
+    
+    def select_excel(self):
+        file = filedialog.askopenfilename(
+            title="Selecione o Arquivo Excel",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+        )
+        
+        if file:
+            self.excel_file = file
+            self.excel_label.config(
+                text=os.path.basename(file),
+                fg=self.success_color
+            )
+            self.log_message(f"✓ Excel selecionado: {os.path.basename(file)}", "success")
+    
+    def extract_pdf_data(self, pdf_path):
+        """Extrai dados do PDF"""
+        if pdfplumber is None:
+            self.log_message("❌ Biblioteca pdfplumber não instalada!", "error")
+            return None
+        
+        data = {
+            'file': os.path.basename(pdf_path),
+            'accounts': []
+        }
+        
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                all_text = ""
+                for page in pdf.pages:
+                    page_text = page.extract_text(
+                        x_tolerance=2,
+                        y_tolerance=2,
+                        layout=True
+                    )
+                    if page_text:
+                        all_text += page_text + "\n"
+                
+                if not all_text.strip():
+                    self.log_message("    ⚠ PDF vazio ou sem texto extraível", "warning")
+                    return data
+                
+                all_text = re.sub(r'(\d)\s+(\d)', r'\1\2', all_text)
+                all_text = re.sub(r'(\d)\s*,\s*(\d)', r'\1,\2', all_text)
+                all_text = re.sub(r'\$\s*(\d)', r'$\1', all_text)
+                
+                self.log_message(f"    📄 {len(all_text)} caracteres extraídos", "info")
+                
+                account_pattern = r'(?<!\d)(\d{8,20})(?!\d)'
+                amount_regex_base = r'(\d{1,3}(?:,\d{3})*\.\d{2})'
+                sap_regex_base = r'(\d{4}-[\d-]{6,50})'
+                
+                lines = all_text.split('\n')
+                current_account_header = None
+                
+                for line_idx, line in enumerate(lines):
+                    if not line.strip():
+                        continue
+                    
+                    header_match = re.search(
+                        r'(Account Number|ACCT NO\.|Account:)\s*[:\s]*(\d{8,20})',
+                        line,
+                        re.IGNORECASE
+                    )
+                    if header_match:
+                        current_account_header = header_match.group(2)
+                        self.log_message(f"    📌 Conta header: {current_account_header}", "info")
+                    
+                    line_upper = line.upper()
+                    ignore_keywords = [
+                        'TOTAL', 'SUBTOTAL', 'SUB-TOTAL', 'CLOSING', 'OPENING',
+                        'BALANCE', 'SUMMARY', 'CREDITS:', 'DEBITS:', 'GRAND TOTAL',
+                        'SUM', 'AMOUNT DUE', 'TOTALS:', 'NET TOTAL', 'AVAILABLE'
+                    ]
+                    if any(keyword in line_upper for keyword in ignore_keywords):
+                        continue
+                    
+                    line_account = None
+                    acct_match = re.search(account_pattern, line)
+                    if acct_match:
+                        acct = acct_match.group(1)
+                        if not (acct.startswith('202') or acct.startswith('201') or 
+                                acct.startswith('200') or acct.startswith('100')):
+                            line_account = acct
+                    
+                    if not line_account and current_account_header:
+                        line_account = current_account_header
+                    
+                    line_sap = None
+                    sap_match = re.search(sap_regex_base, line)
+                    if sap_match:
+                        line_sap = sap_match.group(1)
+                    elif line_idx > 0:
+                        sap_match_prev = re.search(sap_regex_base, lines[line_idx-1])
+                        if sap_match_prev:
+                            line_sap = sap_match_prev.group(1)
+                    if not line_sap and (line_idx + 1 < len(lines)):
+                        sap_match_next = re.search(sap_regex_base, lines[line_idx+1])
+                        if sap_match_next:
+                            line_sap = sap_match_next.group(1)
+                    
+                    line_amount = None
+                    found_matches_in_line = []
+                    
+                    neg_pattern = r'\(\$?' + amount_regex_base + r'\)'
+                    for m in re.finditer(neg_pattern, line):
+                        found_matches_in_line.append((m.group(1), True, m.start(1)))
+                    
+                    pos_pattern = r'(?<!\()\$?' + amount_regex_base
+                    for m in re.finditer(pos_pattern, line):
+                        context_start = max(0, m.start() - 2)
+                        if '(' not in line[context_start : m.start()]:
+                            found_matches_in_line.append((m.group(1), False, m.start(1)))
+                    
+                    filtered_matches = []
+                    for m_text, m_neg, m_start in found_matches_in_line:
+                        is_substring = False
+                        for other_text, _, other_start in found_matches_in_line:
+                            if m_text != other_text and other_text.endswith(m_text) and m_start > other_start:
+                                is_substring = True
+                                break
+                        if not is_substring:
+                            filtered_matches.append((m_text, m_neg))
+                    
+                    if filtered_matches:
+                        best_match, is_negative = sorted(filtered_matches, key=lambda x: len(x[0]), reverse=True)[0]
+                        amt_clean = best_match.replace(',', '').replace(' ', '')
+                        if is_negative:
+                            amt_clean = '-' + amt_clean
+                        try:
+                            if float(amt_clean) != 0:
+                                line_amount = amt_clean
+                        except:
+                            pass
+                    
+                    if line_account or line_amount or line_sap:
+                        is_duplicate = False
+                        for existing in data['accounts']:
+                            if (existing['acct_no'] == line_account and  
+                                existing['amount'] == line_amount and
+                                existing['sap'] == line_sap and 
+                                (line_account is not None or line_amount is not None)):
+                                is_duplicate = True
+                                break
+                        
+                        if not is_duplicate:
+                            data['accounts'].append({
+                                'acct_no': line_account,
+                                'amount': line_amount,
+                                'sap': line_sap
+                            })
+                
+                unique_accounts = []
+                seen = set()
+                for acc in data['accounts']:
+                    key_acct = acc['acct_no'] if acc['acct_no'] else "None"
+                    key_amt = acc['amount'] or "None"
+                    key_sap = acc['sap'] or "None"
+                    key = f"{key_acct}|{key_amt}|{key_sap}"
+                    
+                    if key == "None|None|None":
+                        continue
+                    if key not in seen:
+                        seen.add(key)
+                        unique_accounts.append(acc)
+                
+                data['accounts'] = unique_accounts
+                self.log_message(f"    ✓ {len(data['accounts'])} registros extraídos", "success")
+                
+                return data
+                
+        except Exception as e:
+            self.log_message(f"❌ Erro ao processar {os.path.basename(pdf_path)}: {str(e)}", "error")
+            import traceback
+            self.log_message(f"    Detalhes: {traceback.format_exc()}", "error")
+            return None
+
+    def compare_extracts(self):
+        if not self.extract_files:
+            messagebox.showwarning("Aviso", "Selecione pelo menos um Extrato Bancário!")
+            return
+        
+        if not self.voucher_files:
+            messagebox.showwarning("Aviso", "Selecione pelo menos um Comprovante!")
+            return
+        
+        if pdfplumber is None:
+            messagebox.showerror("Erro", "Instale a biblioteca: pip install pdfplumber")
+            return
+        
+        self.populate_results_table([])
+        
+        thread = threading.Thread(target=self._compare_extracts_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _compare_extracts_thread(self):
+        """Thread para comparação COM MATCH SUBSTRING"""
+        self.progress.start()
+        self.log_message("=" * 60, "info")
+        self.log_message("🔍 Iniciando reconciliação COM MATCH SUBSTRING", "info")
+        self.log_message("=" * 60, "info")
+        
+        self.comparison_results = []
+        
+        self.log_message("\n📄 PROCESSANDO EXTRATOS BANCÁRIOS:", "info")
+        extracts_data = []
+        for pdf_file in self.extract_files:
+            self.log_message(f"  → {os.path.basename(pdf_file)}", "info")
+            data = self.extract_pdf_data(pdf_file)
+            if data and data['accounts']:
+                extracts_data.extend(data['accounts'])
+                self.log_message(f"    ✓ {len(data['accounts'])} registro(s)", "success")
+            else:
+                self.log_message(f"    ⚠ Nenhum dado extraído", "warning")
+        
+        filtered_extracts = []
+        for e in extracts_data:
+            if not e['acct_no'] or not e['amount']:
+                continue
+            try:
+                valor = float(e['amount'])
+                if abs(valor) <= 0.01:
+                    continue
+            except:
+                continue
+            filtered_extracts.append(e)
+        
+        ignored_count = len(extracts_data) - len(filtered_extracts)
+        if ignored_count > 0:
+            self.log_message(f"\n⚠ {ignored_count} registro(s) ignorados (sem conta/valor ou valor zero)", "warning")
+        
+        self.log_message(f"📊 {len(filtered_extracts)} registros válidos nos extratos", "info")
+        
+        self.log_message("\n📋 PROCESSANDO COMPROVANTES:", "info")
+        vouchers_data = []
+        for pdf_file in self.voucher_files:
+            self.log_message(f"  → {os.path.basename(pdf_file)}", "info")
+            data = self.extract_pdf_data(pdf_file)
+            if data and data['accounts']:
+                vouchers_data.extend(data['accounts'])
+                self.log_message(f"    ✓ {len(data['accounts'])} registro(s)", "success")
+            else:
+                self.log_message(f"    ⚠ Nenhum dado extraído", "warning")
+        
+        if not filtered_extracts:
+            self.log_message("\n❌ Nenhum registro válido nos EXTRATOS", "error")
+            self.progress.stop()
+            return
+        
+        if not vouchers_data:
+            self.log_message("\n❌ Nenhum dado nos COMPROVANTES", "error")
+            self.progress.stop()
+            return
+        
+        # ÍNDICES COM SUBSTRING SUPPORT
+        vouchers_by_account_exact = {}
+        vouchers_by_account_substring = {}  # NOVO
+        vouchers_by_amount = {}
+        vouchers_by_sap = {}
+        
+        for voucher in vouchers_data:
+            # Indexar por conta EXATA
+            if voucher['acct_no']:
+                acct = voucher['acct_no']
+                if acct not in vouchers_by_account_exact:
+                    vouchers_by_account_exact[acct] = []
+                vouchers_by_account_exact[acct].append(voucher)
+                
+                # NOVO: Indexar por substrings (para encontrar 422964509 dentro de 630142296450910)
+                # Pegar todas as substrings de 8-11 dígitos da conta
+                for length in range(8, min(12, len(acct) + 1)):
+                    for start in range(len(acct) - length + 1):
+                        substring = acct[start:start + length]
+                        if substring not in vouchers_by_account_substring:
+                            vouchers_by_account_substring[substring] = []
+                        vouchers_by_account_substring[substring].append(voucher)
+            
+            if voucher['sap']:
+                if voucher['sap'] not in vouchers_by_sap:
+                    vouchers_by_sap[voucher['sap']] = []
+                vouchers_by_sap[voucher['sap']].append(voucher)
+            
+            if voucher['amount']:
+                try:
+                    amount_val = float(voucher['amount'])
+                    if abs(amount_val) > 0.01:
+                        amount_key = round(amount_val, 2)
+                        if amount_key not in vouchers_by_amount:
+                            vouchers_by_amount[amount_key] = []
+                        vouchers_by_amount[amount_key].append(voucher)
+                except:
+                    pass
+        
+        self.log_message("\n" + "=" * 60, "info")
+        self.log_message("📊 RESULTADOS DA RECONCILIAÇÃO", "info")
+        self.log_message("=" * 60, "info")
+        
+        for extract in filtered_extracts:
+            extract_acct = extract['acct_no']
+            extract_amt = float(extract['amount'])
+            extract_sap = extract['sap']
+            
+            result = {
+                'extrato_conta': extract['acct_no'],
+                'extrato_valor': extract['amount'],
+                'comprovante_conta': None,
+                'comprovante_valor': None,
+                'sap': None,
+                'status': 'NÃO ENCONTRADO',
+                'diferenca': None,
+                'observacao': 'Não encontrado'
+            }
+            
+            self.log_message(
+                f"\n🔹 EXTRATO - Conta: {extract_acct} | "
+                f"Valor: {extract['amount']} | "
+                f"SAP: {extract_sap or 'N/A'}",
+                "info"
+            )
+            
+            # ESTRATÉGIA 1: Match EXATO por conta
+            found_vouchers = vouchers_by_account_exact.get(extract_acct, [])
+            
+            # ESTRATÉGIA 1.5: Match SUBSTRING (NOVO)
+            if not found_vouchers:
+                found_vouchers = vouchers_by_account_substring.get(extract_acct, [])
+                if found_vouchers:
+                    self.log_message(
+                        f"  → Conta {extract_acct} encontrada como SUBSTRING "
+                        f"em {len(found_vouchers)} conta(s) do comprovante",
+                        "info"
+                    )
+            
+            if found_vouchers:
+                if extract_acct in vouchers_by_account_exact:
+                    self.log_message(
+                        f"  ✓ Conta {extract_acct} encontrada EXATA "
+                        f"({len(found_vouchers)} transações)",
+                        "success"
+                    )
+                
+                best_match = None
+                min_diff = float('inf')
+                
+                # Priorizar match por SAP+Valor
+                if extract_sap:
+                    for v in found_vouchers:
+                        if v['sap'] == extract_sap and v['amount']:
+                            try:
+                                voucher_amt = float(v['amount'])
+                                diff = abs(extract_amt - voucher_amt)
+                                if diff < min_diff:
+                                    min_diff = diff
+                                    best_match = v
+                                    if diff < 0.01:
+                                        break
+                            except:
+                                pass
+                
+                # Buscar por valor
+                if not best_match:
+                    for v in found_vouchers:
+                        if v['amount']:
+                            try:
+                                voucher_amt = float(v['amount'])
+                                diff = abs(extract_amt - voucher_amt)
+                                if diff < min_diff:
+                                    min_diff = diff
+                                    best_match = v
+                                    if diff < 0.01:
+                                        break
+                            except:
+                                pass
+                
+                if best_match:
+                    voucher_amt = float(best_match['amount'])
+                    result['comprovante_conta'] = best_match['acct_no']
+                    result['comprovante_valor'] = best_match['amount']
+                    result['sap'] = best_match['sap']
+                    
+                    if min_diff < 0.01:
+                        result['status'] = 'OK'
+                        result['diferenca'] = 0.0
+                        result['observacao'] = 'Valores conferem'
+                        self.log_message(f"  ✓ OK - Match exato!", "success")
+                    else:
+                        result['status'] = 'NOK - Valor Divergente'
+                        result['diferenca'] = min_diff
+                        result['observacao'] = f'Diferença: ${min_diff:.2f}'
+                        self.log_message(f"  ✗ NOK - Diferença: ${min_diff:.2f}", "error")
+                else:
+                    result['status'] = 'COMPROVANTE SEM VALOR'
+                    result['observacao'] = 'Conta encontrada mas sem valor válido'
+                    self.log_message(f"  ⚠ Conta encontrada mas sem valor", "warning")
+            
+            # ESTRATÉGIA 2: Buscar por SAP
+            elif extract_sap and extract_sap in vouchers_by_sap:
+                sap_matches = vouchers_by_sap[extract_sap]
+                self.log_message(
+                    f"  → Conta não encontrada, mas SAP {extract_sap} encontrado!",
+                    "info"
+                )
+                
+                v = sap_matches[0]
+                result['comprovante_conta'] = v['acct_no']
+                result['comprovante_valor'] = v['amount']
+                result['sap'] = v['sap']
+                result['status'] = 'NOK - Conta Incorreta'
+                result['observacao'] = f"SAP confere mas conta diferente: {v['acct_no']}"
+                self.log_message(f"  ⚠ Conta incorreta: {v['acct_no']}", "warning")
+            
+            # ESTRATÉGIA 3: Buscar por VALOR
+            else:
+                amount_key = round(extract_amt, 2)
+                matching_vouchers = vouchers_by_amount.get(amount_key, [])
+                
+                if matching_vouchers:
+                    v = matching_vouchers[0]
+                    result['status'] = 'NOK - Conta Incorreta'
+                    result['comprovante_conta'] = v['acct_no']
+                    result['comprovante_valor'] = v['amount']
+                    result['sap'] = v['sap']
+                    result['diferenca'] = 0.0
+                    result['observacao'] = f"Valor confere mas conta diferente: {v['acct_no']}"
+                    self.log_message(
+                        f"  ⚠ Valor ${extract_amt:.2f} encontrado em outra conta: {v['acct_no']}",
+                        "warning"
+                    )
+                else:
+                    self.log_message(f"  ❌ Nada encontrado", "error")
+            
+            self.comparison_results.append(result)
+        
+        self.log_message("\n" + "=" * 60, "info")
+        self.log_message("✨ Reconciliação concluída!", "success")
+        self.log_message(f"📊 {len(self.comparison_results)} registros processados", "success")
+        self.log_message("💡 Use 'Exportar Relatório' para gerar arquivo Excel", "info")
+        self.log_message("=" * 60, "info")
+        
+        self.root.after(0, self.populate_results_table, self.comparison_results)
+        self.progress.stop()
+    
+    def update_excel(self):
+        if not self.excel_file:
+            messagebox.showwarning("Aviso", "Selecione um arquivo Excel!")
+            return
+        
+        if not self.extract_files:
+            messagebox.showwarning("Aviso", "Selecione pelo menos um Extrato Bancário (PDF)!")
+            return
+        
+        if load_workbook is None:
+            messagebox.showerror("Erro", "Instale a biblioteca: pip install openpyxl")
+            return
+        
+        thread = threading.Thread(target=self._update_excel_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _update_excel_thread(self):
+        self.progress.start()
+        self.log_message("=" * 60, "info")
+        self.log_message("📝 Atualizando Excel com valores do EXTRATO...", "info")
+        self.log_message("=" * 60, "info")
+        
+        try:
+            wb = load_workbook(self.excel_file)
+            if 'PaymentRequests' not in wb.sheetnames:
+                self.log_message("❌ Aba 'PaymentRequests' não encontrada!", "error")
+                self.progress.stop()
+                return
+            
+            ws = wb['PaymentRequests']
+            self.log_message("✓ Aba 'PaymentRequests' encontrada", "success")
+
+            sap_col_idx = None
+            amount_col_idx = None
+            
+            SAP_HEADER_NAME = "SAP Request"
+            AMOUNT_HEADER_NAME = "Amount"
+            
+            for cell in ws[1]:
+                if cell.value is None:
+                    continue
+                cell_value = str(cell.value).upper().strip()
+                if SAP_HEADER_NAME.upper() in cell_value:
+                    sap_col_idx = cell.column
+                if AMOUNT_HEADER_NAME.upper() in cell_value:
+                    amount_col_idx = cell.column
+            
+            if not sap_col_idx:
+                sap_col_idx = 7
+                self.log_message(f"⚠ Cabeçalho SAP '{SAP_HEADER_NAME}' não encontrado, usando coluna G (7)", "warning")
+            if not amount_col_idx:
+                amount_col_idx = 6
+                self.log_message(f"⚠ Cabeçalho Valor '{AMOUNT_HEADER_NAME}' não encontrado, usando coluna F (6)", "warning")
+                
+            self.log_message(f"✓ Mapeamento: [SAP: Col {sap_col_idx}], [Valor: Col {amount_col_idx}]", "info")
+
+            self.log_message("...Mapeando SAP -> Valor dos EXTRATOS...", "info")
+            sap_to_amount_map = {}
+            for pdf_file in self.extract_files:
+                self.log_message(f"  → Lendo Extrato: {os.path.basename(pdf_file)}", "info")
+                data = self.extract_pdf_data(pdf_file)
+                if not data:
+                    continue
+                
+                for acc in data['accounts']:
+                    if acc['sap'] and acc['amount']:
+                        try:
+                            val = float(acc['amount'])
+                            if abs(val) > 0.01:
+                                if acc['sap'] not in sap_to_amount_map:
+                                    sap_to_amount_map[acc['sap']] = acc['amount']
+                                    self.log_message(
+                                        f"    ...SAP {acc['sap']} -> Valor {acc['amount']}",
+                                        "info"
+                                    )
+                        except:
+                            pass
+            
+            self.log_message(f"✓ {len(sap_to_amount_map)} pares SAP->Valor encontrados", "success")
+            
+            if len(sap_to_amount_map) == 0:
+                self.log_message("❌ NENHUM SAP foi encontrado nos Extratos", "error")
+                self.progress.stop()
+                return
+
+            updates = 0
+            for row in range(2, ws.max_row + 1):
+                sap_value_cell = ws.cell(row=row, column=sap_col_idx)
+                sap_value = None
+                if sap_value_cell.value:
+                    sap_value = str(sap_value_cell.value).strip()
+                
+                if not sap_value or sap_value.upper() == SAP_HEADER_NAME.upper():
+                    continue
+
+                if sap_value in sap_to_amount_map:
+                    amount = sap_to_amount_map[sap_value]
+                    ws.cell(row=row, column=amount_col_idx).value = float(amount)
+                    updates += 1
+                    self.log_message(
+                        f"  ✓ Linha {row}: SAP {sap_value} -> Valor {amount}",
+                        "success"
+                    )
+                else:
+                    self.log_message(
+                        f"  ✗ Linha {row}: SAP {sap_value} (não encontrado)",
+                        "error"
+                    )
+            
+            if updates == 0:
+                self.log_message("⚠ Nenhum SAP do Excel foi encontrado", "warning")
+
+            wb.save(self.excel_file)
+            
+            self.log_message(f"\n✨ Excel atualizado com sucesso!", "success")
+            self.log_message(f"📊 {updates} registro(s) atualizado(s)", "success")
+            
+        except Exception as e:
+            self.log_message(f"❌ Erro ao atualizar Excel: {str(e)}", "error")
+            import traceback
+            self.log_message(f"Detalhes: {traceback.format_exc()}", "error")
+        
+        finally:
+            self.progress.stop()
+
+    def export_report(self):
+        if not self.comparison_results:
+            messagebox.showwarning("Aviso", "Execute a comparação primeiro!")
+            return
+        
+        if load_workbook is None:
+            messagebox.showerror("Erro", "Instale a biblioteca: pip install openpyxl")
+            return
+        
+        thread = threading.Thread(target=self._export_report_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _export_report_thread(self):
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        
+        self.progress.start()
+        self.log_message("=" * 60, "info")
+        self.log_message("📤 Gerando relatório Excel...", "info")
+        self.log_message("=" * 60, "info")
+        
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Reconciliação"
+            
+            header_fill = PatternFill(start_color="0e639c", end_color="0e639c", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF", size=12)
+            ok_fill = PatternFill(start_color="c6efce", end_color="c6efce", fill_type="solid")
+            ok_font = Font(bold=True, color="006100")
+            nok_fill = PatternFill(start_color="ffc7ce", end_color="ffc7ce", fill_type="solid")
+            nok_font = Font(bold=True, color="9c0006")
+            warning_fill = PatternFill(start_color="ffeb9c", end_color="ffeb9c", fill_type="solid")
+            warning_font = Font(bold=True, color="9c5700")
+            border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            
+            headers = [
+                'Conta (Extrato)', 'Valor (Extrato)', 'Conta (Comprovante)',
+                'Valor (Comprovante)', 'SAP', 'Status', 'Diferença', 'Observação'
+            ]
+            
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.border = border
+            
+            status_counts = {
+                'OK': 0,
+                'NOK - Valor Divergente': 0,
+                'NOK - Conta Incorreta': 0,
+                'COMPROVANTE SEM VALOR': 0,
+                'NÃO ENCONTRADO': 0
+            }
+
+            for row_idx, result in enumerate(self.comparison_results, 2):
+                cols = [
+                    result['extrato_conta'],
+                    result['extrato_valor'],
+                    result['comprovante_conta'] or '',
+                    result['comprovante_valor'] or '',
+                    result['sap'] or '',
+                    result['status'],
+                    result['diferenca'] or '',
+                    result['observacao'] or ''
+                ]
+                
+                if result['status'] not in status_counts:
+                    status_counts[result['status']] = 0
+                status_counts[result['status']] += 1
+                
+                for col_idx, val in enumerate(cols, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                    cell.border = border
+                    
+                    if col_idx in [2, 4, 7]:
+                        cell.alignment = Alignment(horizontal='right')
+                        try:
+                            f_val = float(val)
+                            if abs(f_val) > 0:
+                                cell.number_format = '$#,##0.00'
+                            else:
+                                cell.value = ''
+                        except:
+                            pass
+                    elif col_idx == 6:
+                        cell.alignment = Alignment(horizontal='center')
+                        cell.font = Font(bold=True)
+                        if result['status'] == 'OK':
+                            cell.fill = ok_fill
+                            cell.font = ok_font
+                        elif 'NOK' in result['status']:
+                            cell.fill = nok_fill
+                            cell.font = nok_font
+                        elif 'NÃO ENCONTRADO' in result['status']:
+                            cell.fill = nok_fill
+                            cell.font = nok_font
+                        elif 'COMPROVANTE SEM VALOR' in result['status']:
+                            cell.fill = warning_fill
+                            cell.font = warning_font
+                    else:
+                        cell.alignment = Alignment(horizontal='left')
+
+            ws.column_dimensions['A'].width = 20
+            ws.column_dimensions['B'].width = 18
+            ws.column_dimensions['C'].width = 20
+            ws.column_dimensions['D'].width = 18
+            ws.column_dimensions['E'].width = 18
+            ws.column_dimensions['F'].width = 22
+            ws.column_dimensions['G'].width = 15
+            ws.column_dimensions['H'].width = 35
+            
+            last_row = len(self.comparison_results) + 3
+            ws.cell(row=last_row, column=1, value="RESUMO").font = Font(bold=True, size=12)
+            
+            ws.cell(row=last_row+1, column=1, value="✓ OK:")
+            ws.cell(row=last_row+1, column=2, value=status_counts['OK']).fill = ok_fill
+            
+            ws.cell(row=last_row+2, column=1, value="✗ NOK - Valor Divergente:")
+            ws.cell(row=last_row+2, column=2, value=status_counts['NOK - Valor Divergente']).fill = nok_fill
+            
+            ws.cell(row=last_row+3, column=1, value="✗ NOK - Conta Incorreta:")
+            ws.cell(row=last_row+3, column=2, value=status_counts['NOK - Conta Incorreta']).fill = nok_fill
+
+            ws.cell(row=last_row+4, column=1, value="⚠ Comprov. Sem Valor:")
+            ws.cell(row=last_row+4, column=2, value=status_counts['COMPROVANTE SEM VALOR']).fill = warning_fill
+            
+            ws.cell(row=last_row+5, column=1, value="❌ Não Encontrado:")
+            ws.cell(row=last_row+5, column=2, value=status_counts['NÃO ENCONTRADO']).fill = nok_fill
+            
+            ws.cell(row=last_row+6, column=1, value="TOTAL:")
+            ws.cell(row=last_row+6, column=2, value=len(self.comparison_results)).font = Font(bold=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"Relatorio_Reconciliacao_{timestamp}.xlsx"
+            
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                initialfile=filename,
+                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+            )
+            
+            if save_path:
+                wb.save(save_path)
+                self.log_message(f"\n✨ Relatório exportado com sucesso!", "success")
+                self.log_message(f"📁 Arquivo: {os.path.basename(save_path)}", "success")
+                self.log_message(f"\n📊 Resumo:", "info")
+                self.log_message(f"  ✓ OK: {status_counts['OK']}", "success")
+                self.log_message(f"  ✗ NOK (Valor Diverg.): {status_counts['NOK - Valor Divergente']}", "error")
+                self.log_message(f"  ✗ NOK (Conta Incorr.): {status_counts['NOK - Conta Incorreta']}", "error")
+                self.log_message(f"  ⚠ Comprov. Sem Valor: {status_counts['COMPROVANTE SEM VALOR']}", "warning")
+                self.log_message(f"  ❌ Não Encontrado: {status_counts['NÃO ENCONTRADO']}", "error")
+                self.log_message(f"  TOTAL: {len(self.comparison_results)}", "info")
+            else:
+                self.log_message("⚠ Exportação cancelada", "warning")
+            
+        except Exception as e:
+            self.log_message(f"❌ Erro ao exportar: {str(e)}", "error")
+            import traceback
+            self.log_message(f"Detalhes: {traceback.format_exc()}", "error")
+        
+        finally:
+            self.progress.stop()
+
+    def populate_results_table(self, results):
+        for item in self.results_tree.get_children():
+            self.results_tree.delete(item)
+            
+        tag_map = {
+            'OK': 'ok',
+            'NÃO ENCONTRADO': 'nok',
+            'NOK - Valor Divergente': 'nok',
+            'NOK - Conta Incorreta': 'nok',
+            'COMPROVANTE SEM VALOR': 'warning'
+        }
+
+        for result in results:
+            values = (
+                result['extrato_conta'],
+                result['extrato_valor'],
+                result['comprovante_conta'] or '',
+                result['comprovante_valor'] or '',
+                result['sap'] or '',
+                result['status'],
+                result['observacao'] or ''
+            )
+            
+            tag = tag_map.get(result['status'], 'default')
+            self.results_tree.insert('', tk.END, values=values, tags=(tag,))
+
+
+def main():
+    missing = []
+    if pdfplumber is None:
+        missing.append("pdfplumber")
+    if load_workbook is None:
+        missing.append("openpyxl")
+    
+    if missing:
+        root = tk.Tk()
+        root.withdraw()
+        
+        message = "Erro: Bibliotecas faltando!\n\n"
+        message += "Por favor, instale:\n\n"
+        message += f"pip install {' '.join(missing)}"
+        
+        messagebox.showerror("Erro de Dependência", message)
+        root.destroy()
+        return
+
+    root = tk.Tk()
+    app = PTPWizard(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
